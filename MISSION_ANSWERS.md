@@ -73,3 +73,28 @@ Dưới đây là 5 lỗi thiết kế (anti-patterns) được phát hiện tro
   - Nginx định tuyến traffic đến `agent` qua DNS nội bộ của Docker bằng tên dịch vụ `agent:8000`.
   - Agent kết nối tới Redis qua URL `redis://redis:6379/0` và Qdrant qua `http://qdrant:6333`.
   - Chỉ duy nhất container `nginx` mở cổng (expose ports `80` và `443`) ra ngoài máy host, các dịch vụ còn lại hoàn toàn ẩn danh trong mạng nội bộ, giúp tăng tối đa tính bảo mật.
+
+---
+
+## Part 3: Cloud Deployment
+
+### Exercise 3.1: Railway deployment
+- **URL:** https://day12-nongduchoang-2a202600580-production.up.railway.app
+- **Screenshot:** [Screenshots of deployment](screenshots/) (Bạn hãy chụp ảnh giao diện dashboard Railway hoạt động và kết quả chạy thử Swagger để thêm vào thư mục `screenshots/`)
+- **Kết quả kiểm thử Endpoint `/health`:**
+  ```json
+  {
+    "status": "ok",
+    "uptime_seconds": 171.1,
+    "platform": "Railway",
+    "timestamp": "2026-06-12T08:54:24.186593+00:00"
+  }
+  ```
+- **Kết quả kiểm thử Endpoint `/ask`:**
+  ```json
+  {
+    "question": "hello",
+    "answer": "Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ OpenAI/Anthropic.",
+    "platform": "Railway"
+  }
+  ```
