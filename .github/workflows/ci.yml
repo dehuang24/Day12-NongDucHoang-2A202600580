@@ -1,0 +1,30 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  readiness-check:
+    name: Production Readiness Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f 06-lab-complete/requirements.txt ]; then pip install -r 06-lab-complete/requirements.txt; fi
+
+    - name: Run Production Readiness Checker
+      run: |
+        python 06-lab-complete/check_production_ready.py
