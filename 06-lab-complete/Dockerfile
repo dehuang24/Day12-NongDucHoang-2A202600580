@@ -29,7 +29,7 @@ COPY --from=builder /root/.local /home/agent/.local
 COPY app/ ./app/
 COPY utils/ ./utils/
 
-RUN chown -R agent:agent /app
+RUN chown -R agent:agent /app && chown -R agent:agent /home/agent
 
 USER agent
 
