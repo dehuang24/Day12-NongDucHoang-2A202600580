@@ -1,0 +1,4 @@
+Vui lòng đặt các ảnh chụp màn hình deployment của bạn tại thư mục này:
+1. dashboard.png
+2. running.png
+3. test.png

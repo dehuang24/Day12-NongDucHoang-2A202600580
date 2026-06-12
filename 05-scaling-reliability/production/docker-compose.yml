@@ -18,7 +18,7 @@ services:
   agent:
     build:
       context: ../..
-      dockerfile: 05-scaling-reliability/advanced/Dockerfile
+      dockerfile: 05-scaling-reliability/production/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
       - ENVIRONMENT=demo
@@ -49,7 +49,7 @@ services:
   # Redis
   # ──────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: public.ecr.aws/docker/library/redis:7-alpine
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -63,7 +63,7 @@ services:
   # Nginx — Load Balancer
   # ──────────────────────────────────────
   nginx:
-    image: nginx:alpine
+    image: public.ecr.aws/docker/library/nginx:alpine
     ports:
       - "8080:80"
     volumes:

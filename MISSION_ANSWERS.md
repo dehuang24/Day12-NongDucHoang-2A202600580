@@ -42,7 +42,7 @@ Dưới đây là 5 lỗi thiết kế (anti-patterns) được phát hiện tro
   - **Stage 1 (Builder):** Sử dụng `python:3.11-slim` làm nền, cài đặt các công cụ biên dịch thiết yếu (`gcc`, `libpq-dev`) để biên dịch/cài đặt các thư viện phụ thuộc trong `requirements.txt` vào thư mục tạm thời `/root/.local`.
   - **Stage 2 (Runtime):** Sử dụng một base image sạch `python:3.11-slim`, tạo ra tài khoản người dùng bảo mật `appuser` (non-root) để chạy ứng dụng và chỉ sao chép thư mục thư viện `/root/.local` từ Stage 1 sang. Nhờ loại bỏ toàn bộ các công cụ build cồng kềnh và tệp tin rác phát sinh ở Stage 1, kích thước image cuối cùng cực kỳ nhỏ gọn, tối ưu và nâng cao tính bảo mật cho môi trường sản xuất.
 
-### Exercise 2.4: Docker Compose stack
+#### Exercise 2.4: Docker Compose stack
 - **Mô hình kiến trúc (Architecture Diagram):**
 ```
       HTTP Traffic (Port 80)
@@ -98,3 +98,166 @@ Dưới đây là 5 lỗi thiết kế (anti-patterns) được phát hiện tro
     "platform": "Railway"
   }
   ```
+
+---
+
+## Part 4: API Security
+
+### Exercise 4.1-4.3: Test results
+
+#### 1. API Key Authentication (Exercise 4.1)
+Dưới đây là câu trả lời cho các câu hỏi về API Key Authentication trong file `04-api-gateway/develop/app.py`:
+- **API key được check ở đâu?**
+  - API key được kiểm tra tập trung trong hàm dependency `verify_api_key` (dòng 39-54). Hàm này được truyền vào endpoint `/ask` thông qua cơ chế Dependency Injection của FastAPI: `_key: str = Depends(verify_api_key)`.
+  - FastAPI sử dụng `APIKeyHeader(name="X-API-Key", auto_error=False)` để tự động trích xuất giá trị từ HTTP Header `X-API-Key`.
+- **Điều gì xảy ra nếu sai key?**
+  - **Nếu thiếu header `X-API-Key`:** Hệ thống trả về mã trạng thái HTTP `401 Unauthorized` kèm thông tin lỗi: `{"detail": "Missing API key. Include header: X-API-Key: <your-key>"}`.
+  - **Nếu cung cấp sai key:** Hệ thống trả về mã trạng thái HTTP `403 Forbidden` kèm thông tin lỗi: `{"detail": "Invalid API key."}`.
+- **Làm sao rotate key?**
+  - Để rotate (xoay vòng) API key, ta chỉ cần thay đổi giá trị của biến môi trường `AGENT_API_KEY` (ví dụ trên môi trường Docker, file `.env`, Railway dashboard, v.v.).
+  - Khi đó, dòng lệnh `API_KEY = os.getenv("AGENT_API_KEY", "demo-key-change-in-production")` sẽ tự động nạp giá trị key mới mà không yêu cầu lập trình viên phải sửa trực tiếp mã nguồn ứng dụng.
+
+---
+
+#### 2. JWT + Rate Limiting Test Outputs (Exercise 4.2-4.3)
+Dưới đây là kết quả kiểm thử chạy thực tế bằng script `04-api-gateway/production/test_security.py` kết nối tới server production bảo mật (JWT + Rate limiting + Cost guard):
+
+```text
+--- 1. Test GET /health (Public) ---
+Status: 200
+Response: {"status":"ok","uptime_seconds":8.6,"security":"JWT + RateLimit + CostGuard","timestamp":"2026-06-12T09:08:25.647200+00:00"}
+
+--- 2. Test POST /ask (Không có Token - Expected 401) ---
+Status: 401
+Response: {"detail":"Authentication required. Include: Authorization: Bearer <token>"}
+
+--- 3. Đăng nhập lấy JWT Token (student / demo123) ---
+Token lấy thành công (20 kí tự đầu): eyJhbGciOiJIUzI1NiIs
+
+--- 4. Gửi câu hỏi POST /ask hợp lệ (Có Token - Expected 200) ---
+Status: 200
+Response: {"question":"Hi, what is Docker?","answer":"Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!","usage":{"requests_remaining":9,"budget_remaining_usd":1.9e-05}}
+
+--- 5. Spam 12 requests liên tiếp để kích hoạt Rate Limiting (Expected 429) ---
+Request 1: Success (200) - Remaining requests: 8
+Request 2: Success (200) - Remaining requests: 7
+Request 3: Success (200) - Remaining requests: 6
+Request 4: Success (200) - Remaining requests: 5
+Request 5: Success (200) - Remaining requests: 4
+Request 6: Success (200) - Remaining requests: 3
+Request 7: Success (200) - Remaining requests: 2
+Request 8: Success (200) - Remaining requests: 1
+Request 9: Success (200) - Remaining requests: 0
+Request 10: Failed (429) - {"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":39}}
+```
+
+**Phân tích chi tiết về Rate Limiting:**
+- **Thuật toán sử dụng:** **Sliding Window Counter**. Thuật toán này sử dụng một hàng đợi hai đầu (`deque`) lưu trữ các timestamp của request. Khi có request mới, các timestamp cũ hơn 60 giây (ngoài window) sẽ bị loại bỏ bằng `popleft()`. Nếu kích thước hàng đợi vẫn đạt giới hạn cấu hình, hệ thống sẽ từ chối request.
+- **Giới hạn số requests:**
+  - Đối với vai trò **user** (ví dụ tài khoản `student`): Giới hạn là **10 requests/minute**.
+  - Đối với vai trò **admin** (ví dụ tài khoản `teacher`): Giới hạn là **100 requests/minute**.
+- **Cách bypass/áp dụng linh hoạt giới hạn cho admin:**
+  - Trong file `auth.py`, thông tin role (`admin` hoặc `user`) được mã hóa trực tiếp bên trong JWT Payload khi người dùng đăng nhập thành công.
+  - Khi trích xuất và giải mã JWT thành công tại endpoint `/ask`, hệ thống kiểm tra trường `user["role"]`.
+  - Endpoint định tuyến và áp dụng dynamic rate limiter: `limiter = rate_limiter_admin if role == "admin" else rate_limiter_user`. Nhờ vậy, admin sẽ có quota lớn hơn và không bị block dễ dàng khi thao tác hệ thống.
+
+---
+
+### Exercise 4.4: Cost guard implementation
+
+#### 1. Phương pháp tiếp cận (Our Approach)
+Để ngăn ngừa rủi ro phát sinh hóa đơn LLM khổng lồ do vòng lặp vô tận (infinite loop) hoặc các cuộc tấn công DDoS/spam từ phía client, chúng tôi xây dựng lớp trung gian **Cost Guard** với cơ chế hoạt động như sau:
+- **Đơn vị hóa chi phí (Token Pricing):** Định nghĩa cấu trúc giá tiền dựa trên đơn vị $1k tokens thực tế của model (Ví dụ: `GPT-4o-mini` có giá `0.00015 USD` cho 1k input tokens và `0.0006 USD` cho 1k output tokens).
+- **Theo dõi định kỳ (Daily Tracking):** Sử dụng đối tượng dữ liệu `UsageRecord` để lưu trữ lượng token và chi phí tích lũy theo ngày (`YYYY-MM-DD`) của từng user.
+- **Kiểm soát hai lớp (Dual Budget Protection):**
+  1. **Lớp User:** Giới hạn chi phí tối đa hàng ngày cho mỗi người dùng (`daily_budget_usd = $1.0`). Khi vượt qua, hệ thống trả về mã lỗi HTTP `402 Payment Required`.
+  2. **Lớp Hệ thống (Global):** Đặt giới hạn chi phí tối đa cho toàn hệ thống (`global_daily_budget_usd = $10.0`) nhằm bảo vệ tổng ví tiền của admin. Khi vượt qua, hệ thống tự động ngắt kết nối và trả về mã lỗi HTTP `503 Service Temporarily Unavailable`.
+- **Cảnh báo sớm (Warning threshold):** Khi lượng chi phí tích lũy của user đạt từ `80%` (warn_at_pct), hệ thống sẽ log một dòng cảnh báo nguy cơ cạn kiệt budget để quản trị viên có thể kịp thời nạp tiền hoặc nâng cấp gói dịch vụ.
+
+#### 2. Định hướng triển khai Production
+Trong demo in-memory, dữ liệu tiêu thụ được lưu trữ trong một dictionary `self._records` trên RAM của tiến trình ứng dụng. Trên môi trường production thực tế chạy multi-instance (qua Load Balancer), chúng tôi áp dụng các cải tiến sau:
+- **Lưu trữ tập trung bằng Redis:** Thay thế dictionary local bằng Redis để chia sẻ trạng thái giữa nhiều instance của API container.
+- **Tính toán nguyên tử (Atomic Increments):** Sử dụng lệnh `r.incrbyfloat(key, cost)` để cập nhật chi phí một cách an toàn mà không lo lắng về tranh chấp luồng (race conditions).
+- **Tự động dọn dẹp bằng TTL:** Thiết lập thời gian hết hạn cho key Redis tự động (ví dụ: `expire(key, 32 * 24 * 3600)`) để hệ thống tự động giải phóng bộ nhớ khi sang chu kỳ tháng mới.
+
+---
+
+## Part 5: Scaling & Reliability
+
+### Exercise 5.1-5.5: Implementation notes
+
+#### 1. Health Checks - Liveness & Readiness Probes (Exercise 5.1)
+- **Liveness Probe (`/health`):**
+  - **Mục tiêu:** Trả lời câu hỏi "Tiến trình của Agent có còn hoạt động bình thường không?". Nếu gặp lỗi treo cứng (deadlock) hoặc tràn RAM, liveness probe sẽ trả về mã lỗi và cloud platform (Railway/Render/Kubernetes) sẽ tự động khởi động lại (restart) container.
+  - **Triển khai:** Endpoint trả về trạng thái tổng thể `"status": "ok"` hoặc `"degraded"`, thông tin uptime hệ thống, phiên bản ứng dụng, và mức tiêu thụ tài nguyên thực tế (`psutil.virtual_memory()`).
+- **Readiness Probe (`/ready`):**
+  - **Mục tiêu:** Trả lời câu hỏi "Agent đã sẵn sàng nhận kết nối từ người dùng chưa?". Load Balancer sẽ dựa vào endpoint này để quyết định có điều hướng traffic vào container này hay không.
+  - **Triển khai:** Chỉ trả về trạng thái `200 OK` khi biến trạng thái `_is_ready = True` (sau khi nạp xong model, kết nối thành công tới Redis/Database). Nếu không, trả về `503 Service Unavailable` và tạm thời loại bỏ container khỏi danh sách định tuyến.
+
+---
+
+#### 2. Graceful Shutdown (Exercise 5.2)
+- **Cơ chế hoạt động:**
+  - Khi platform gửi tín hiệu `SIGTERM` (yêu cầu tắt container), Uvicorn sẽ bắt tín hiệu này thông qua `lifespan` context manager.
+  - Ứng dụng ngay lập tức chuyển trạng thái `_is_ready = False` (để `/ready` trả về lỗi và Load Balancer ngừng gửi request mới đến instance này).
+  - Ứng dụng sử dụng một middleware `track_requests` theo dõi số lượng `_in_flight_requests` (các yêu cầu đang xử lý dở dang). Tiến trình shutdown sẽ đợi (sleep) cho đến khi toàn bộ request đang xử lý hoàn thành (hoặc hết timeout 30 giây) rồi mới ngắt kết nối phụ trợ và dừng container sạch sẽ.
+- **Kết quả thực nghiệm:** Requests đang xử lý dở dang được hoàn tất trọn vẹn trước khi tiến trình tắt hẳn, loại bỏ hoàn toàn lỗi đứt gãy kết nối đột ngột (connection reset) phía client.
+
+---
+
+#### 3. Stateless Design & Load Balancing (Exercise 5.3 - 5.5)
+Dưới đây là kết quả kiểm thử chạy thực tế bằng script `05-scaling-reliability/production/test_stateless.py` kết nối tới hệ thống Load Balancer Nginx điều phối traffic tới 3 instances agent độc lập và dùng Redis lưu trữ session tập trung:
+
+```text
+============================================================
+Stateless Scaling Demo
+============================================================
+
+Session ID: 4db2fe75-ef77-412e-a58e-1a875cf6aee8
+
+Request 1: [instance-efbee4]
+  Q: What is Docker?
+  A: Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!...
+
+Request 2: [instance-f31af7]
+  Q: Why do we need containers?
+  A: Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ O...
+
+Request 3: [instance-2e5d3d]
+  Q: What is Kubernetes?
+  A: Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé....
+
+Request 4: [instance-efbee4]
+  Q: How does load balancing work?
+  A: Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận....
+
+Request 5: [instance-f31af7]
+  Q: What is Redis used for?
+  A: Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ O...
+
+------------------------------------------------------------
+Total requests: 5
+Instances used: {'instance-2e5d3d', 'instance-efbee4', 'instance-f31af7'}
+✅ All requests served despite different instances!
+
+--- Conversation History ---
+Total messages: 10
+  [user]: What is Docker?...
+  [assistant]: Container là cách đóng gói app để chạy ở mọi nơi. Build once...
+  [user]: Why do we need containers?...
+  [assistant]: Đây là câu trả lời từ AI agent (mock). Trong production, đây...
+  [user]: What is Kubernetes?...
+  [assistant]: Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đ...
+  [user]: How does load balancing work?...
+  [assistant]: Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã đư...
+  [user]: What is Redis used for?...
+  [assistant]: Đây là câu trả lời từ AI agent (mock). Trong production, đây...
+
+✅ Session history preserved across all instances via Redis!
+```
+
+**Nhận xét:**
+- Mặc dù mỗi request được định tuyến ngẫu nhiên (Round-Robin) tới các instance khác nhau (`instance-2e5d3d`, `instance-efbee4`, `instance-f31af7`), cuộc trò chuyện không hề bị đứt quãng.
+- Toàn bộ lịch sử trò chuyện (Conversation History) đã được bảo toàn nguyên vẹn trên tất cả các instance vì chúng được lưu trữ và truy vấn chung thông qua cơ sở dữ liệu **Redis** chứ không phụ thuộc vào bộ nhớ RAM cục bộ (in-memory) của từng máy chủ. Đây là nguyên tắc cốt lõi của **Stateless Design** để scale-out ứng dụng vô hạn trong thực tế.
+
+
